@@ -5,19 +5,17 @@ import {
   Post,
   UseInterceptors,
   UploadedFile,
-  Param
+  Param,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 
-import { diskStorage } from 'multer';
-import { extname } from 'path';
-import { existsSync, mkdirSync } from 'fs';
-import { createHash } from 'crypto';
+import { memoryStorage } from 'multer';
 
+import { BufferedFile } from 'src/models/file.model';
 import { FileTransferService } from './file-transfer.service';
 
 @Controller({
-  path: 'files'
+  path: 'files',
 })
 export class FileTransferController {
   private readonly logger: Logger;
@@ -27,7 +25,7 @@ export class FileTransferController {
 
   @Get()
   index() {
-    return 'hello from file transfer';
+    return 'hello from file transfer controller';
   }
 
   @Get('bucket')
@@ -36,59 +34,12 @@ export class FileTransferController {
   }
 
   @Post('upload/:destination')
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: diskStorage({
-        destination: (req, file, cb) => setFileDestination(req, file, cb),
-        filename: (req, file, cb) => setHashName(req, file, cb)
-      })
-    })
-  )
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
   async uploadFile(
-    @Param('destination') destination,
-    @UploadedFile('file') file
+    @Param('destination') destination: string,
+    @UploadedFile('file') file: BufferedFile,
   ) {
-    const metaData = {
-      'Content-Type': 'application/octet-stream',
-      'X-Amz-Meta-Testing': 1234
-      // tslint:disable-next-line: object-literal-key-quotes
-      // example: 5678,
-    };
-    const fileName: string = `${destination}/${file.filename}`;
-    const filePath = file.path;
-
-    return await this.fileTransfer.uploadFile(fileName, filePath, metaData);
+    this.logger.log(`upload of file ${file.originalname} was requested`);
+    return await this.fileTransfer.uploadFile(file, destination);
   }
 }
-
-export const setFileDestination = (req, file, cb) => {
-  const dest = req.params.destination;
-  return cb(null, setDestinationPath(dest));
-};
-
-export const setHashName = (req, file, cb) => {
-  const hashedName = getHash(file.originalname);
-  return cb(null, `${hashedName}${extname(file.originalname)}`);
-};
-
-export const setDestinationPath = (destination: string) => {
-  const filePath = getFilePath(destination);
-  if (!existsSync(filePath)) {
-    createFilePath(filePath);
-  }
-  return filePath;
-};
-
-export const getFilePath = (destination: string) =>
-  `${process.cwd()}/tmp_files/${!!destination ? destination : 'unknown'}`;
-
-export const createFilePath = path => mkdirSync(path, { recursive: true });
-
-export const getHash = (
-  str: string,
-  alg = 'sha1',
-  digest: 'hex' | 'latin1' | 'base64' = 'hex'
-) =>
-  createHash(alg)
-    .update(str)
-    .digest(digest);

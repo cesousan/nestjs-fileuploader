@@ -7,9 +7,9 @@ import { RedisModule } from 'nestjs-redis';
   imports: [
     RedisModule.forRootAsync({
       useFactory: (configService: ConfigService) =>
-        configService.get('redisConnection'),
-      inject: [ConfigService]
-    })
-  ]
+        configService.get('redisConnection')(true),
+      inject: [ConfigService],
+    }),
+  ],
 })
 export class RedisCacheModule {}
