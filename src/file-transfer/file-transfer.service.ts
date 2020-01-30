@@ -1,21 +1,34 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
+import { Stream } from 'stream';
+import { from, of, throwError, Observable, forkJoin } from 'rxjs';
+import {
+  switchMap,
+  catchError,
+  tap,
+  map,
+  mapTo,
+  concatMap,
+  mergeMap,
+} from 'rxjs/operators';
 import { MinioService } from 'nestjs-minio-client';
 
 import { RedisCacheService } from 'src/cache/redis-cache.service';
-import { rk, rCachedImgsKey } from 'src/cache/redis-keys';
+import { rk, rCachedFilesKey, rKeys } from 'src/cache/redis-keys';
 import { getHashedFileName, getOriginalFileMetadata } from 'src/utils';
 import {
   BufferedFile,
   StoredFile,
   StoredFileMetadata,
+  HasFile,
 } from 'src/models/file.model';
 
 @Injectable()
 export class FileTransferService {
   private readonly logger: Logger;
   private readonly baseBucket: string;
+  private readonly defaultFileEncoding = 'base64';
   constructor(
     private readonly minio: MinioService,
     private readonly config: ConfigService,
@@ -25,145 +38,227 @@ export class FileTransferService {
     this.baseBucket = this.config.get('baseBucket');
   }
 
-  async listAllBuckets() {
+  async listAllBuckets(): Promise<any[]> {
     return this.minio.client.listBuckets();
   }
 
-  async uploadFile(
+  uploadFile(
     file: BufferedFile,
     destination: string,
-  ): Promise<StoredFile> {
-    try {
-      const hashedFileName = getHashedFileName(file);
-      const fileCachedKey = rk(rCachedImgsKey, hashedFileName);
-      const cachedFile = await this.getFileFromCache(file, fileCachedKey);
-      if (cachedFile) {
-        this.logger.log(`serving ${file.originalname} DIRECTLY from cache`);
-        return cachedFile;
-      } else {
-        // minio upload
-        const minioUpload: Promise<boolean> = this.uploadToMinio(
-          this.baseBucket,
-          destination,
-          hashedFileName,
-          file,
-        );
+  ): Observable<StoredFileMetadata | null> {
+    const hashedFileName = getHashedFileName(file.originalname);
+    const fileCachedKey = rk(rCachedFilesKey, rKeys.FILE, hashedFileName);
+    const fileMetadataKey = rk(rCachedFilesKey, rKeys.METADATA, hashedFileName);
 
-        // redis caching
-        const fileToCache = {
-          id: hashedFileName,
-          file: file.buffer,
-          ...getOriginalFileMetadata(file),
-        };
-        const cacheFile: Promise<boolean> = this.setFileInCache(
-          fileToCache,
-          fileCachedKey,
-        );
+    const cachedFileExists$ = this.cache.recordExists(fileCachedKey);
+    const fileMetadata$ = this.retrieveFileMetadata(fileMetadataKey);
 
-        // outcomes
-        const operations: boolean[] = await Promise.all([
-          minioUpload,
-          cacheFile,
-        ]);
-
-        if (operations.every(x => !!x)) {
-          const fileFromCache = await this.getFileFromCache(
-            file,
-            fileCachedKey,
-          );
-          this.logger.log(
-            `serving ${file.originalname} from cache after successfully uploading to minio`,
-          );
-          return fileFromCache;
-        }
-      }
-    } catch (err) {
-      this.logger.error(err);
-    }
+    return forkJoin(fileMetadata$, cachedFileExists$).pipe(
+      mergeMap(([metadata, isInCache]) =>
+        !!metadata && isInCache
+          ? of(metadata)
+          : this.performFullUpload(destination, file).pipe(
+              mergeMap(outcome =>
+                outcome ? this.retrieveFileMetadata(fileMetadataKey) : of(null),
+              ),
+            ),
+      ),
+    );
   }
 
-  async setFileInCache(file: StoredFile, fileKey?: string): Promise<boolean> {
-    const key = !!fileKey
-      ? fileKey
-      : rk(rCachedImgsKey, getHashedFileName(file));
-    try {
-      return await this.cache.setHash(key, file);
-    } catch (err) {
-      this.logger.error(err);
-      return Promise.reject('error in setFileInCache');
-    }
-  }
-
-  async getFileFromCache(
-    file: any,
-    fileKey?: string,
-  ): Promise<StoredFile | null> {
-    const key = !!fileKey
-      ? fileKey
-      : rk(rCachedImgsKey, getHashedFileName(file));
-    try {
-      if (!!(await this.cache.recordExists(key))) {
-        const cachedFile = await this.cache.getHash<StoredFile>(key);
-
-        const convertedFile = {
-          ...cachedFile,
-          file: Buffer.from(cachedFile.file as string, 'base64'),
-        };
-
-        return convertedFile;
-      } else {
-        return Promise.resolve(null);
-      }
-    } catch (err) {
-      this.logger.error(err);
-      return Promise.reject('error in getFileFromCache');
-    }
-  }
-
-  private async checkBucket(bucket: string, makeBucket = false) {
-    try {
-      const bucketExists: boolean = await this.minio.client.bucketExists(
-        bucket,
-      );
-      if (!bucketExists) {
-        if (makeBucket) {
-          await this.minio.client.makeBucket(bucket);
+  getFile(id: string, destination: string): Observable<any> {
+    const fileCachedKey = rk(rCachedFilesKey, rKeys.FILE, id);
+    return this.retrieveFileFromCache(fileCachedKey).pipe(
+      concatMap(cachedFile => {
+        if (cachedFile) {
+          this.logger.log(`serving ${id} FROM CACHE`);
+          return of(cachedFile);
         } else {
-          throw new Error('the required bucket does not exist');
+          this.logger.log(`serving ${id} FROM MINIO`);
+          return this.downloadFromMinio(this.baseBucket, destination, id).pipe(
+            tap(stream => {
+              if (!!stream) {
+                const buffers = [];
+                stream.on('data', d => {
+                  buffers.push(d);
+                });
+                stream.on('end', () => {
+                  const file: HasFile = { file: Buffer.concat(buffers) };
+                  this.setFileInCache(file as StoredFile, fileCachedKey);
+                });
+              }
+            }),
+          );
         }
-      }
-    } catch (err) {
-      this.logger.error(err);
-    }
+      }),
+    );
   }
 
-  private async uploadToMinio(
+  getFileMetada(id: string) {
+    const fileMetadataKey = rk(rCachedFilesKey, rKeys.METADATA, id);
+    return this.retrieveFileMetadata(fileMetadataKey);
+  }
+
+  private downloadFromMinio<T extends Stream>(
+    bucket,
+    destination,
+    fileId,
+  ): Observable<T> {
+    const fileName: string = `${destination}/${fileId}`;
+    return this.checkMinioBucketExists(bucket).pipe(
+      switchMap(async exists =>
+        !!exists
+          ? await this.minio.client.getObject(bucket, fileName)
+          : throwError('the requiered file does not exist on minio server'),
+      ),
+      catchError(err => {
+        this.logger.error(`An error occured ::: ${err}`);
+        return of(null);
+      }),
+    );
+  }
+
+  private setFileInCache(
+    { name, file }: StoredFile,
+    key?: string,
+  ): Observable<boolean> {
+    const fileKey = !!key
+      ? key
+      : rk(rCachedFilesKey, rKeys.FILE, getHashedFileName(name));
+    return this.cache.setRecord(fileKey, file);
+  }
+
+  private storeFileMetadata(
+    { file, ...fileMetadata }: StoredFile,
+    key?: string,
+  ): Observable<boolean> {
+    const fileKey = !!key
+      ? key
+      : rk(rCachedFilesKey, rKeys.METADATA, fileMetadata.id);
+    fileMetadata = { ...fileMetadata, updatedAt: new Date() };
+    return this.cache.setHash(fileKey, fileMetadata);
+  }
+
+  private retrieveFileFromCache(fileKey: string): Observable<Stream> {
+    return this.cache
+      .recordExists(fileKey)
+      .pipe(
+        map(exists =>
+          exists ? (this.cache.getRecordAsStream(fileKey) as Stream) : null,
+        ),
+      );
+  }
+
+  private retrieveFileMetadata(
+    metadataKey: string,
+  ): Observable<StoredFileMetadata> {
+    return this.cache
+      .recordExists(metadataKey)
+      .pipe(
+        mergeMap(exists =>
+          !!exists
+            ? this.cache.getHash<StoredFileMetadata>(metadataKey)
+            : of(null),
+        ),
+      );
+  }
+
+  private performFullUpload(
+    destination: string,
+    file: BufferedFile,
+  ): Observable<boolean> {
+    const fileMetadata = getOriginalFileMetadata(file);
+    const fileCachedKey = rk(rCachedFilesKey, rKeys.FILE, fileMetadata.id);
+    const fileMetadataKey = rk(
+      rCachedFilesKey,
+      rKeys.METADATA,
+      fileMetadata.id,
+    );
+
+    const fileToStore: StoredFile = {
+      file: file.buffer,
+      ...fileMetadata,
+      encoding: this.defaultFileEncoding,
+    };
+
+    // minio upload
+    const minioUpload$: Observable<boolean> = this.uploadToMinio(
+      this.baseBucket,
+      destination,
+      fileMetadata.id,
+      file,
+    );
+
+    // redis caching
+    const cacheFile$: Observable<boolean> = this.setFileInCache(
+      fileToStore,
+      fileCachedKey,
+    );
+
+    // store metadata
+    const storeFileMetadata$: Observable<boolean> = this.storeFileMetadata(
+      fileToStore,
+      fileMetadataKey,
+    );
+
+    return forkJoin([minioUpload$, cacheFile$, storeFileMetadata$]).pipe(
+      map(outcomes => outcomes.every(res => res === true)),
+      catchError(err => {
+        this.logger.error('error in performFullUpload');
+        this.logger.debug(err);
+        return of(false);
+      }),
+    );
+  }
+
+  private checkMinioBucketExists(
+    bucket: string,
+    makeBucket = false,
+  ): Observable<boolean> {
+    return from(
+      this.minio.client.bucketExists(bucket) as Promise<boolean>,
+    ).pipe(
+      switchMap((exists: boolean) => {
+        if (!exists && makeBucket) {
+          return from(this.minio.client.makeBucket(bucket)).pipe(
+            map(Boolean),
+            catchError(() => of(false)),
+          );
+        }
+        return of(exists);
+      }),
+    );
+  }
+
+  private uploadToMinio(
     baseBucket: string,
     destination: string,
     hashedFileName: string,
-    file: any,
-  ) {
+    file: BufferedFile,
+  ): Observable<boolean> {
     const metaData = {
-      'Content-Type': 'application/octet-stream',
+      'Content-Type': file.mimetype,
       'X-Amz-Meta-Testing': 1234,
     };
     const fileName: string = `${destination}/${hashedFileName}`;
     const fileBuffer = file.buffer;
-    try {
-      await this.checkBucket(baseBucket, true);
-      const etag = await this.minio.client.putObject(
-        baseBucket,
-        fileName,
-        fileBuffer,
-        metaData,
-      );
-      if (!etag) {
-        throw new Error('error while uploading file to minio');
-      }
-      return Promise.resolve(true);
-    } catch (err) {
-      this.logger.error(err);
-      return Promise.reject('error in uploadToMinio');
-    }
+    return this.checkMinioBucketExists(baseBucket, true).pipe(
+      switchMap(async exists =>
+        exists
+          ? await this.minio.client.putObject(
+              baseBucket,
+              fileName,
+              fileBuffer,
+              metaData,
+            )
+          : throwError('bucket does not exist and could not be created'),
+      ),
+      mapTo(true),
+      catchError(err => {
+        this.logger.error('error while uploading file to minio');
+        this.logger.debug(err);
+        return of(false);
+      }),
+    );
   }
 }

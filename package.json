@@ -28,6 +28,7 @@
     "@types/multer": "^1.3.10",
     "nestjs-minio-client": "0.0.4",
     "nestjs-redis": "^1.2.5",
+    "redis-rstream": "^1.0.1",
     "reflect-metadata": "^0.1.13",
     "rimraf": "^3.0.0",
     "rxjs": "^6.5.3"
@@ -64,5 +65,11 @@
     },
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
+  },
+  "prettier": {
+    "trailingComma": "all",
+    "tabWidth": 2,
+    "semi": true,
+    "singleQuote": true
   }
 }

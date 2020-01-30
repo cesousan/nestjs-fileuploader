@@ -6,6 +6,6 @@ const { useSSL, endPoint, port } = getMinioConfig().minioClient;
 const minioOrigin = `${useSSL ? 'https' : 'http'}://${endPoint}:${port}`;
 const clientOrigin = `http://localhost:4200`;
 
-export default <CorsOptions>{
-  origin: [clientOrigin, minioOrigin]
-};
+export default {
+  origin: [clientOrigin, minioOrigin],
+} as CorsOptions;

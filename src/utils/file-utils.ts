@@ -1,11 +1,7 @@
 import { extname } from 'path';
 import { existsSync, mkdirSync } from 'fs';
 import { createHash } from 'crypto';
-import {
-  BufferedFile,
-  StoredFile,
-  StoredFileMetadata,
-} from 'src/models/file.model';
+import { BufferedFile, StoredFileMetadata } from 'src/models/file.model';
 
 export const setFileDestination = (req, file, cb) => {
   const dest = req.params.destination;
@@ -13,8 +9,7 @@ export const setFileDestination = (req, file, cb) => {
 };
 
 export const setHashName = (req, file, cb) => {
-  const hashedName = getHash(file.originalname);
-  return cb(null, getHashedFileName(file));
+  return cb(null, getHashedFileName(file.originalname));
 };
 
 export const setDestinationPath = (destination: string) => {
@@ -45,17 +40,19 @@ export const getHash = (
     .update(str)
     .digest(digest);
 
-export const getHashedFileName = file =>
-  `${getHash(file.originalname)}${extname(file.originalname)}`;
+export const getHashedFileName = originalname =>
+  `${getHash(originalname)}${extname(originalname)}`;
 
 export const getOriginalFileMetadata = (
   file: BufferedFile,
 ): StoredFileMetadata => {
   const { encoding, mimetype, size, originalname: name } = file;
   return {
+    id: getHashedFileName(name),
     encoding,
     mimetype,
     size,
     name,
+    updatedAt: null,
   };
 };

@@ -4,7 +4,7 @@ export default () => ({
     port: 9000,
     useSSL: false,
     accessKey: 'minioadmin',
-    secretKey: 'minioadmin'
+    secretKey: 'minioadmin',
   },
-  baseBucket: 'my-sport'
+  baseBucket: 'my-sport',
 });

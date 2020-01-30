@@ -11,6 +11,6 @@ const minioClientConfig = minioConfig().minioClient;
 @Module({
   imports: [MinioModule.register(minioClientConfig)],
   controllers: [FileTransferController],
-  providers: [FileTransferService, RedisCacheService]
+  providers: [FileTransferService, RedisCacheService],
 })
 export class FileTransferModule {}

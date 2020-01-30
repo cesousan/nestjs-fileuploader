@@ -1,71 +1,91 @@
 import { Injectable, Logger } from '@nestjs/common';
 
+import { Stream } from 'stream';
+import { from, Observable, of } from 'rxjs';
+import { map, catchError, mapTo, tap } from 'rxjs/operators';
 import { RedisService } from 'nestjs-redis';
+import * as redisRStream from 'redis-rstream';
 
 @Injectable()
 export class RedisCacheService {
   private readonly logger: Logger;
-  private _client;
+  private redisClient;
 
   public get client() {
-    return this._client;
-  }
-
-  public async recordExists(key: string): Promise<boolean> {
-    return !!(await this.client.exists(key));
-  }
-
-  public async getRecord(key: string): Promise<any | null> {
-    try {
-      return await this.client.get(key);
-    } catch (err) {
-      // this.logger.error(err);
-      return Promise.resolve(null);
-    }
-  }
-
-  public async setRecord<T>(key: string, value: T, ttl = 60): Promise<boolean> {
-    try {
-      await this.client.set(key, value, 'EX', ttl);
-      return Promise.resolve(true);
-    } catch (err) {
-      this.logger.error('error in setRecord');
-      return Promise.reject('Error while setting the record in redis database');
-    }
-  }
-
-  public async setHash<T extends object>(
-    key: string,
-    value: T,
-    ttl = 60,
-  ): Promise<boolean> {
-    const flattenedValue = Object.entries(value).reduce(
-      (acc, curr) => acc.concat(curr),
-      [],
-    );
-    try {
-      await this.client.hmset(key, flattenedValue);
-      await this.client.expire(key, ttl);
-      return Promise.resolve(true);
-    } catch (err) {
-      this.logger.error('error in setHash');
-      return Promise.reject('Error while setting the record in redis database');
-    }
-  }
-
-  public async getHash<T extends object>(key: string): Promise<T | null> {
-    try {
-      return await this.client.hgetall(key);
-    } catch (err) {
-      this.logger.error('error in getHash');
-      this.logger.error(err);
-      return Promise.resolve(null);
-    }
+    return this.redisClient;
   }
 
   constructor(private readonly redis: RedisService) {
     this.logger = new Logger('RedisCacheService');
     this.initReditClient();
+  }
+
+  public recordExists(key: string): Observable<boolean> {
+    return from(this.client.exists(key) as Promise<boolean>).pipe(map(Boolean));
+  }
+
+  public getRecord(
+    key: string,
+    resetTtl: boolean = true,
+    ttl = 60,
+  ): Observable<any | null> {
+    return from(this.client.get(key) as Promise<any>).pipe(
+      map(record => (!!record ? record : null)),
+      tap(record =>
+        !!record && resetTtl ? this.client.expire(key, ttl) : undefined,
+      ),
+      catchError(err => {
+        this.logger.error('error in getRecord');
+        this.logger.debug(err);
+        return of(null);
+      }),
+    );
+  }
+
+  public getRecordAsStream(key: string): Stream {
+    return redisRStream(this.client, key);
+  }
+
+  public getHash<T extends object>(key: string): Observable<T | null> {
+    return from(this.client.hgetall(key)).pipe(
+      map(record => (!!record ? record : null)),
+      catchError(err => {
+        this.logger.error('error in getHash');
+        this.logger.debug(err);
+        return of(null);
+      }),
+    );
+  }
+
+  public setRecord<T>(key: string, value: T, ttl = 60): Observable<boolean> {
+    return from(this.client.set(key, value, 'EX', ttl)).pipe(
+      mapTo(true),
+      catchError(err => {
+        this.logger.error('error in setRecord');
+        this.logger.debug(err);
+        return of(false);
+      }),
+    );
+  }
+
+  public setHash<T extends object>(
+    key: string,
+    value: T,
+    ttl: number = null,
+  ): Observable<boolean> {
+    const flattenedValue = Object.entries(value).reduce(
+      (acc, curr) => acc.concat(curr),
+      [],
+    );
+    return from(this.client.hmset(key, flattenedValue)).pipe(
+      tap(() => (ttl !== null ? this.client.expire(key, ttl) : undefined)),
+      mapTo(true),
+      catchError(err => {
+        this.logger.error('error in setHash');
+        this.logger.debug(err);
+        return of(false);
+      }),
+    );
   }
 
   private async getClient(): Promise<any> {
@@ -77,7 +97,7 @@ export class RedisCacheService {
   }
 
   private async initReditClient() {
-    this._client = await this.getClient();
+    this.redisClient = await this.getClient();
     this.logger.log('redis client initialized');
   }
 }

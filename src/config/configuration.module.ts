@@ -10,10 +10,10 @@ import validationSchema from './validation-schema';
     ConfigModule.forRoot({
       isGlobal: true,
       validationSchema,
-      load: [minioConfig, redisConfig]
-    })
+      load: [minioConfig, redisConfig],
+    }),
   ],
   providers: [ConfigService],
-  exports: [ConfigService]
+  exports: [ConfigService],
 })
 export class ConfigurationModule {}
