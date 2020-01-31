@@ -1,16 +1,12 @@
 import { Module } from '@nestjs/common';
-import { MinioModule } from 'nestjs-minio-client';
 
-import minioConfig from '../config/minio.config';
 import { FileTransferService } from './file-transfer.service';
 import { FileTransferController } from './file-transfer.controller';
-import { RedisCacheService } from 'src/cache/redis-cache.service';
-
-const minioClientConfig = minioConfig().minioClient;
+import { StorageModule } from 'src/storage/storage.module';
 
 @Module({
-  imports: [MinioModule.register(minioClientConfig)],
+  imports: [StorageModule],
   controllers: [FileTransferController],
-  providers: [FileTransferService, RedisCacheService],
+  providers: [FileTransferService],
 })
 export class FileTransferModule {}

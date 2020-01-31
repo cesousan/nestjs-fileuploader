@@ -2,12 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 
 import { Stream } from 'stream';
 import { from, Observable, of } from 'rxjs';
-import { map, catchError, mapTo, tap } from 'rxjs/operators';
+import { map, catchError, mapTo } from 'rxjs/operators';
 import { RedisService } from 'nestjs-redis';
 import * as redisRStream from 'redis-rstream';
 
 @Injectable()
-export class RedisCacheService {
+export class RedisStorageService {
   private readonly logger: Logger;
   private redisClient;
 
@@ -16,7 +16,7 @@ export class RedisCacheService {
   }
 
   constructor(private readonly redis: RedisService) {
-    this.logger = new Logger('RedisCacheService');
+    this.logger = new Logger('RedisStorageService');
     this.initReditClient();
   }
 
@@ -24,16 +24,9 @@ export class RedisCacheService {
     return from(this.client.exists(key) as Promise<boolean>).pipe(map(Boolean));
   }
 
-  public getRecord(
-    key: string,
-    resetTtl: boolean = true,
-    ttl = 60,
-  ): Observable<any | null> {
+  public getRecord(key: string): Observable<any | null> {
     return from(this.client.get(key) as Promise<any>).pipe(
       map(record => (!!record ? record : null)),
-      tap(record =>
-        !!record && resetTtl ? this.client.expire(key, ttl) : undefined,
-      ),
       catchError(err => {
         this.logger.error('error in getRecord');
         this.logger.debug(err);
@@ -57,8 +50,8 @@ export class RedisCacheService {
     );
   }
 
-  public setRecord<T>(key: string, value: T, ttl = 60): Observable<boolean> {
-    return from(this.client.set(key, value, 'EX', ttl)).pipe(
+  public setRecord<T>(key: string, value: T): Observable<boolean> {
+    return from(this.client.set(key, value)).pipe(
       mapTo(true),
       catchError(err => {
         this.logger.error('error in setRecord');
@@ -68,17 +61,12 @@ export class RedisCacheService {
     );
   }
 
-  public setHash<T extends object>(
-    key: string,
-    value: T,
-    ttl: number = null,
-  ): Observable<boolean> {
+  public setHash<T extends object>(key: string, value: T): Observable<boolean> {
     const flattenedValue = Object.entries(value).reduce(
       (acc, curr) => acc.concat(curr),
       [],
     );
     return from(this.client.hmset(key, flattenedValue)).pipe(
-      tap(() => (ttl !== null ? this.client.expire(key, ttl) : undefined)),
       mapTo(true),
       catchError(err => {
         this.logger.error('error in setHash');

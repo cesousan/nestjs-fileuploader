@@ -31,12 +31,7 @@ export class FileTransferController {
 
   @Get()
   index() {
-    return 'hello from file transfer controller';
-  }
-
-  @Get('bucket')
-  async getAllBuckets() {
-    return await this.fileTransfer.listAllBuckets();
+    return 'hello from file transfer';
   }
 
   @Post('upload/:destination')
@@ -70,6 +65,6 @@ export class FileTransferController {
   @Get('metadata/:id')
   getFileMetadata(@Param('id') id: string): Observable<StoredFileMetadata> {
     this.logger.log(`metadata of file ${id} requested`);
-    return this.fileTransfer.getFileMetada(id);
+    return this.fileTransfer.getFileMetadata(id);
   }
 }
