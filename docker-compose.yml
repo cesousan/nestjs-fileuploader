@@ -1,0 +1,53 @@
+version: "3.7"
+services:
+  file_transfer:
+    container_name: file_transfer
+    build:
+      context: .
+      target: development
+    env_file:
+      - .env
+    ports:
+      - ${SERVER_PORT}:${SERVER_PORT}
+      - 9229:9229
+    command: npm run start:dev
+    networks:
+      - file_transfer_net
+    depends_on:
+      - redis
+      - minio
+    volumes:
+      - .:/usr/src/app
+      - /usr/src/app/node_modules
+
+  redis:
+    container_name: redis
+    image: redis:alpine
+    # command: ["redis-server", "--bind", "redis", "--port", "6379"]
+    # env_file:
+    #   - .env
+    # ports:
+    #   - 6379
+    # volumes:
+    #   - ./volumes/redis/data:/data
+    networks:
+      - file_transfer_net
+
+  minio:
+    container_name: minio
+    image: minio/minio
+    env_file:
+      - .env
+    command: server /data/minio
+    environment:
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+    ports:
+      - ${MINIO_PORT}:${MINIO_PORT}
+    volumes:
+      - ./volumes/minio/data:/minio/data
+    networks:
+      - file_transfer_net
+
+networks:
+  file_transfer_net:
