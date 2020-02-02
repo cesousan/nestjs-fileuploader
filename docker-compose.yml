@@ -6,9 +6,11 @@ services:
       context: .
       target: development
     env_file:
-      - .env
+      - env/docker.env
     ports:
-      - ${SERVER_PORT}:${SERVER_PORT}
+      # ${SERVER_PORT_DOCKER} is defined in root .env file and
+      # is the same as ${SERVER_PORT} defined in docker.env
+      - ${SERVER_PORT_DOCKER}:${SERVER_PORT_DOCKER}
       - 9229:9229
     command: npm run start:dev
     networks:
@@ -23,13 +25,12 @@ services:
   redis:
     container_name: redis
     image: redis:alpine
-    # command: ["redis-server", "--bind", "redis", "--port", "6379"]
-    # env_file:
-    #   - .env
-    # ports:
-    #   - 6379
-    # volumes:
-    #   - ./volumes/redis/data:/data
+    env_file:
+      - env/docker.env
+    ports:
+      - ${REDIS_PORT}
+    volumes:
+      - ./volumes/redis/data:/data
     networks:
       - file_transfer_net
 
@@ -37,11 +38,8 @@ services:
     container_name: minio
     image: minio/minio
     env_file:
-      - .env
+      - env/docker.env
     command: server /data/minio
-    environment:
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
     ports:
       - ${MINIO_PORT}:${MINIO_PORT}
     volumes:
